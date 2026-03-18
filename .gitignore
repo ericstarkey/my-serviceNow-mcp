@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+nginx/certs/
+coverage/
+*.log

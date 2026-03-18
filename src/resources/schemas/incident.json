@@ -1,0 +1,93 @@
+[
+  {
+    "name": "short_description",
+    "label": "Short Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 255
+  },
+  {
+    "name": "description",
+    "label": "Description",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "caller_id",
+    "label": "Caller",
+    "type": "reference",
+    "required": true,
+    "referenceTable": "sys_user"
+  },
+  {
+    "name": "impact",
+    "label": "Impact",
+    "type": "choice",
+    "required": true,
+    "choices": [
+      { "value": "1", "label": "1 - High" },
+      { "value": "2", "label": "2 - Medium" },
+      { "value": "3", "label": "3 - Low" }
+    ]
+  },
+  {
+    "name": "urgency",
+    "label": "Urgency",
+    "type": "choice",
+    "required": true,
+    "choices": [
+      { "value": "1", "label": "1 - High" },
+      { "value": "2", "label": "2 - Medium" },
+      { "value": "3", "label": "3 - Low" }
+    ]
+  },
+  {
+    "name": "category",
+    "label": "Category",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "inquiry", "label": "Inquiry / Help" },
+      { "value": "software", "label": "Software" },
+      { "value": "hardware", "label": "Hardware" },
+      { "value": "network", "label": "Network" },
+      { "value": "database", "label": "Database" },
+      { "value": "security", "label": "Security" }
+    ]
+  },
+  {
+    "name": "subcategory",
+    "label": "Subcategory",
+    "type": "string",
+    "required": false,
+    "maxLength": 40
+  },
+  {
+    "name": "assignment_group",
+    "label": "Assignment Group",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user_group"
+  },
+  {
+    "name": "assigned_to",
+    "label": "Assigned To",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user"
+  },
+  {
+    "name": "state",
+    "label": "State",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "1", "label": "New" },
+      { "value": "2", "label": "In Progress" },
+      { "value": "3", "label": "On Hold" },
+      { "value": "6", "label": "Resolved" },
+      { "value": "7", "label": "Closed" }
+    ]
+  }
+]

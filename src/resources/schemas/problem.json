@@ -1,0 +1,82 @@
+[
+  {
+    "name": "short_description",
+    "label": "Short Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 255
+  },
+  {
+    "name": "description",
+    "label": "Description",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "known_error",
+    "label": "Known Error",
+    "type": "boolean",
+    "required": false
+  },
+  {
+    "name": "root_cause",
+    "label": "Root Cause",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "workaround",
+    "label": "Workaround",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "fix_notes",
+    "label": "Fix Notes",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "category",
+    "label": "Category",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "software", "label": "Software" },
+      { "value": "hardware", "label": "Hardware" },
+      { "value": "network", "label": "Network" },
+      { "value": "database", "label": "Database" },
+      { "value": "other", "label": "Other" }
+    ]
+  },
+  {
+    "name": "assignment_group",
+    "label": "Assignment Group",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user_group"
+  },
+  {
+    "name": "assigned_to",
+    "label": "Assigned To",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user"
+  },
+  {
+    "name": "state",
+    "label": "State",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "101", "label": "Open" },
+      { "value": "102", "label": "Known Error" },
+      { "value": "103", "label": "Pending Change" },
+      { "value": "104", "label": "Closed/Resolved" }
+    ]
+  }
+]

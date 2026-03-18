@@ -1,0 +1,56 @@
+[
+  {
+    "name": "short_description",
+    "label": "Short Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 255
+  },
+  {
+    "name": "description",
+    "label": "Description",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "request",
+    "label": "Request",
+    "type": "reference",
+    "required": true,
+    "referenceTable": "sc_request"
+  },
+  {
+    "name": "cat_item",
+    "label": "Catalog Item",
+    "type": "reference",
+    "required": true,
+    "referenceTable": "sc_cat_item"
+  },
+  {
+    "name": "quantity",
+    "label": "Quantity",
+    "type": "integer",
+    "required": true
+  },
+  {
+    "name": "requested_for",
+    "label": "Requested For",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user"
+  },
+  {
+    "name": "assignment_group",
+    "label": "Assignment Group",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user_group"
+  },
+  {
+    "name": "due_date",
+    "label": "Due Date",
+    "type": "date",
+    "required": false
+  }
+]

@@ -1,0 +1,48 @@
+[
+  {
+    "name": "short_description",
+    "label": "Short Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 255
+  },
+  {
+    "name": "description",
+    "label": "Description",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "requested_for",
+    "label": "Requested For",
+    "type": "reference",
+    "required": true,
+    "referenceTable": "sys_user"
+  },
+  {
+    "name": "assignment_group",
+    "label": "Assignment Group",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user_group"
+  },
+  {
+    "name": "priority",
+    "label": "Priority",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "1", "label": "1 - Critical" },
+      { "value": "2", "label": "2 - High" },
+      { "value": "3", "label": "3 - Moderate" },
+      { "value": "4", "label": "4 - Low" }
+    ]
+  },
+  {
+    "name": "due_date",
+    "label": "Due Date",
+    "type": "date",
+    "required": false
+  }
+]

@@ -1,0 +1,117 @@
+[
+  {
+    "name": "short_description",
+    "label": "Short Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 255
+  },
+  {
+    "name": "description",
+    "label": "Description",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "type",
+    "label": "Type",
+    "type": "choice",
+    "required": true,
+    "choices": [
+      { "value": "standard", "label": "Standard" },
+      { "value": "normal", "label": "Normal" },
+      { "value": "emergency", "label": "Emergency" }
+    ]
+  },
+  {
+    "name": "category",
+    "label": "Category",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "software", "label": "Software" },
+      { "value": "hardware", "label": "Hardware" },
+      { "value": "network", "label": "Network" },
+      { "value": "database", "label": "Database" },
+      { "value": "other", "label": "Other" }
+    ]
+  },
+  {
+    "name": "risk",
+    "label": "Risk",
+    "type": "choice",
+    "required": true,
+    "choices": [
+      { "value": "1", "label": "High" },
+      { "value": "2", "label": "Medium" },
+      { "value": "3", "label": "Low" },
+      { "value": "4", "label": "Very High" }
+    ]
+  },
+  {
+    "name": "impact",
+    "label": "Impact",
+    "type": "choice",
+    "required": false,
+    "choices": [
+      { "value": "1", "label": "High" },
+      { "value": "2", "label": "Medium" },
+      { "value": "3", "label": "Low" }
+    ]
+  },
+  {
+    "name": "assignment_group",
+    "label": "Assignment Group",
+    "type": "reference",
+    "required": true,
+    "referenceTable": "sys_user_group"
+  },
+  {
+    "name": "assigned_to",
+    "label": "Assigned To",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user"
+  },
+  {
+    "name": "start_date",
+    "label": "Planned Start Date",
+    "type": "datetime",
+    "required": false
+  },
+  {
+    "name": "end_date",
+    "label": "Planned End Date",
+    "type": "datetime",
+    "required": false
+  },
+  {
+    "name": "justification",
+    "label": "Justification",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "implementation_plan",
+    "label": "Implementation Plan",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "backout_plan",
+    "label": "Backout Plan",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  },
+  {
+    "name": "test_plan",
+    "label": "Test Plan",
+    "type": "string",
+    "required": false,
+    "maxLength": 4000
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "name": "short_description",
+    "label": "Short Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 255
+  },
+  {
+    "name": "description",
+    "label": "Description",
+    "type": "string",
+    "required": true,
+    "maxLength": 4000
+  },
+  {
+    "name": "product",
+    "label": "Product",
+    "type": "reference",
+    "required": true,
+    "referenceTable": "cmdb_model"
+  },
+  {
+    "name": "category",
+    "label": "Category",
+    "type": "string",
+    "required": false,
+    "maxLength": 80
+  },
+  {
+    "name": "tags",
+    "label": "Tags",
+    "type": "string",
+    "required": false,
+    "maxLength": 255
+  },
+  {
+    "name": "author",
+    "label": "Author",
+    "type": "reference",
+    "required": false,
+    "referenceTable": "sys_user"
+  }
+]
