@@ -4,7 +4,7 @@ WORKDIR /app
 COPY package*.json tsconfig.json ./
 RUN npm ci
 COPY src/ ./src/
-RUN npm run build
+RUN npm run build && cp -r src/resources/schemas dist/resources/schemas
 
 # Stage 2: Production
 FROM node:20-alpine AS production

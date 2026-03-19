@@ -144,6 +144,35 @@ curl -v http://localhost:8080/sse \
 
 ---
 
+## Local Docker Testing
+
+Use `docker/docker-compose.local.yml` to run the container locally for testing and troubleshooting before deploying to a VPS. This file is a standalone config that exposes port 8080 directly to the host (unlike the VPS config which binds to loopback only).
+
+```bash
+# Build and start
+docker compose -f docker/docker-compose.local.yml up -d --build
+
+# Watch startup logs
+docker compose -f docker/docker-compose.local.yml logs -f mcp
+
+# Verify the SSE endpoint
+curl -v http://localhost:8080/sse \
+  -H "Authorization: Bearer <your-MCP_SERVER_API_KEY>"
+# Expected: HTTP 200, Content-Type: text/event-stream
+
+# Run HTTP integration tests against the container
+npm run test:integration:http
+
+# Tear down
+docker compose -f docker/docker-compose.local.yml down
+```
+
+`LOG_LEVEL` is set to `debug` in this config for verbose output during troubleshooting.
+
+> **Note:** Do not use `docker-compose.local.yml` in production. Use `docker/docker-compose.yml` on the VPS.
+
+---
+
 ## Deploying to a VPS (Docker + Nginx)
 
 > **Prerequisites:** The VPS is running Debian/Ubuntu and has Docker and Docker Compose installed. Nginx and TLS are configured as part of the steps below.
@@ -306,38 +335,66 @@ docker compose -f docker/docker-compose.yml down           # stop
 ## Development Commands
 
 ```bash
-npm run dev              # STDIO mode, hot reload
-npm run dev:http         # HTTP+SSE mode, hot reload
-npm run build            # Compile TypeScript → dist/
-npm start                # Run compiled dist/ (production)
-npm test                 # Unit tests (single run)
-npm run test:watch       # Unit tests in watch mode (TDD)
-npm run test:coverage    # Unit tests + coverage report
-npm run test:integration # Integration tests (requires live ServiceNow instance)
-npm run lint             # ESLint
-npm run lint:fix         # ESLint with auto-fix
-npm run format           # Prettier
-npm run typecheck        # Type check only (no emit)
+npm run dev                  # STDIO mode, hot reload
+npm run dev:http             # HTTP+SSE mode, hot reload
+npm run build                # Compile TypeScript → dist/
+npm start                    # Run compiled dist/ (production)
+npm test                     # Unit tests (single run)
+npm run test:watch           # Unit tests in watch mode (TDD)
+npm run test:coverage        # Unit tests + coverage report
+npm run test:integration     # Integration tests (requires live ServiceNow instance)
+npm run test:integration:http# HTTP+SSE container integration tests (requires running container)
+npm run lint                 # ESLint
+npm run lint:fix             # ESLint with auto-fix
+npm run format               # Prettier
+npm run typecheck            # Type check only (no emit)
 ```
 
-### Integration tests
-
-Integration tests make real calls to a live ServiceNow dev instance and are skipped by default.
+### Unit test coverage
 
 ```bash
-# Requires .env with valid SERVICENOW_INSTANCE_URL and SERVICENOW_API_KEY
-INTEGRATION_TESTS=true npm run test:integration
+npm run test:coverage
 ```
-
-All integration test records use the `[MCP Integration Test]` prefix in `short_description` for easy cleanup.
-
-### Coverage thresholds
 
 | Metric | Threshold |
 |--------|-----------|
 | Statements | 80% |
 | Branches | 75% |
 | Functions | 80% |
+
+### ServiceNow integration tests
+
+Makes real calls to a live ServiceNow dev instance. Skipped by default.
+
+```bash
+# Requires .env with valid SERVICENOW_INSTANCE_URL and SERVICENOW_API_KEY
+npm run test:integration
+```
+
+All integration test records use the `[MCP Integration Test]` prefix in `short_description` for easy cleanup.
+
+### HTTP+SSE container integration tests
+
+Connects to a running MCP server container as a real MCP client via `SSEClientTransport` and exercises tools through the full HTTP transport stack. No live ServiceNow connection is required — the static tools (`list_ticket_types`, `get_ticket_schema`) are sufficient to validate container health.
+
+```bash
+# 1. Start the container (see Local Docker Testing section)
+docker compose -f docker/docker-compose.local.yml up -d
+
+# 2. Run the tests
+npm run test:integration:http
+```
+
+To test against a remote deployment (e.g. the VPS), override the base URL:
+
+```bash
+MCP_HTTP_BASE_URL=https://<your-domain>/sn-mcp npm run test:integration:http
+```
+
+The test suite covers:
+- `list_ticket_types` — SSE connection, auth middleware, and JSON-RPC round-trip
+- `get_ticket_schema` for all 6 tables — confirms static JSON schemas are present in `dist/`
+- `get_ticket` with an invalid identifier — validates structured error handling end-to-end
 
 ---
 

@@ -15,6 +15,7 @@
     "test:watch": "vitest tests/unit",
     "test:coverage": "vitest run --coverage tests/unit",
     "test:integration": "cross-env INTEGRATION_TESTS=true vitest run tests/integration",
+    "test:integration:http": "cross-env INTEGRATION_TESTS_HTTP=true vitest run tests/integration/server",
     "lint": "eslint src tests",
     "lint:fix": "eslint src tests --fix",
     "format": "prettier --write src tests",

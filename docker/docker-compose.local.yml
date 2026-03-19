@@ -1,0 +1,22 @@
+# Standalone local testing config — do NOT use in production
+# Use this file ALONE (not merged with docker-compose.yml) to avoid port binding conflicts
+#
+# Usage:
+#   docker compose -f docker/docker-compose.local.yml up -d --build
+#   docker compose -f docker/docker-compose.local.yml logs -f mcp
+#   docker compose -f docker/docker-compose.local.yml down
+
+services:
+  mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: sn-mcp:latest
+    restart: unless-stopped
+    env_file: ../.env
+    ports:
+      - "8080:8080"      # Expose directly to host for local testing
+    environment:
+      - MCP_TRANSPORT=http
+      - MCP_PORT=8080
+      - LOG_LEVEL=debug  # Verbose logging for troubleshooting
