@@ -146,7 +146,7 @@ curl -v http://localhost:8080/sse \
 
 ## Deploying to a VPS (Docker + Nginx)
 
-> **Prerequisites:** The VPS has Docker and Docker Compose installed, and Nginx is already running on ports 80/443 with TLS. The container binds to `127.0.0.1:8080` only — your existing Nginx proxies to it.
+> **Prerequisites:** The VPS is running Debian/Ubuntu and has Docker and Docker Compose installed. Nginx and TLS are configured as part of the steps below.
 
 ### Step 1 — SSH in and clone the repository
 
@@ -199,19 +199,53 @@ docker compose -f docker/docker-compose.yml ps
 docker compose -f docker/docker-compose.yml logs mcp
 ```
 
-The container runs on `127.0.0.1:8080` and is not reachable from the internet until Nginx is configured in the next step.
+The container listens on `127.0.0.1:8080` and is not reachable from the internet until Nginx is configured in the next steps.
 
-### Step 4 — Add the Nginx proxy block
+### Step 4 — Install Nginx
 
-Find your existing Nginx server block for your domain. Common locations:
+```bash
+sudo apt update
+sudo apt install -y nginx
 
+# Enable Nginx to start on boot and start it now
+sudo systemctl enable nginx
+sudo systemctl start nginx
+
+# Open HTTP and HTTPS through the firewall
+sudo ufw allow 'Nginx Full'
+
+# Verify Nginx is running
+sudo systemctl status nginx
+curl -I http://localhost   # should return 200 OK
 ```
-/etc/nginx/sites-available/<your-site>.conf
-/etc/nginx/conf.d/<your-site>.conf
-/etc/nginx/nginx.conf
+
+### Step 5 — Obtain a TLS certificate
+
+> **Before running Certbot:** make sure your domain's DNS A record points to this VPS's public IP. Certbot performs an HTTP-01 challenge that requires the domain to resolve publicly.
+
+```bash
+sudo apt install -y certbot python3-certbot-nginx
+
+# Issue the certificate — replace <your-domain> with your actual domain
+sudo certbot --nginx -d <your-domain>
 ```
 
-Open the file and paste the contents of `nginx/nginx-snippet.conf` **inside the `server { }` block that handles HTTPS (port 443)**:
+Certbot will prompt for an email address, ask you to agree to the terms of service, and then automatically configure Nginx for HTTPS and set up a cron job for auto-renewal.
+
+Verify that auto-renewal works:
+```bash
+sudo certbot renew --dry-run
+```
+
+### Step 6 — Add the MCP proxy block to Nginx
+
+Certbot created (or updated) a config file for your domain. Open it:
+
+```bash
+sudo nano /etc/nginx/sites-available/<your-domain>
+```
+
+Locate the `server { }` block that contains `listen 443 ssl` and paste the following **inside** that block:
 
 ```nginx
 location /sn-mcp/ {
@@ -239,7 +273,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-### Step 5 — Verify the deployment
+### Step 7 — Verify the deployment
 
 ```bash
 curl -v https://<your-domain>/sn-mcp/sse \
