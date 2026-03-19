@@ -1,0 +1,14 @@
+version: "3.9"
+services:
+  mcp:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: sn-mcp:latest
+    restart: unless-stopped
+    env_file: ../.env
+    ports:
+      - "127.0.0.1:8080:8080"   # Bind to loopback only — existing Nginx proxies to this
+    environment:
+      - MCP_TRANSPORT=http
+      - MCP_PORT=8080

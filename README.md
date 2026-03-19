@@ -144,30 +144,87 @@ curl -v http://localhost:8080/sse \
 
 ---
 
-## Docker
+## Deploying to a VPS (Docker + Nginx)
 
-### Build and run
+> **Prerequisites:** The VPS has Docker and Docker Compose installed, and Nginx is already running on ports 80/443 with TLS. The container binds to `127.0.0.1:8080` only — your existing Nginx proxies to it.
+
+### Step 1 — SSH in and clone the repository
+
+```bash
+ssh user@your-vps-ip
+git clone <your-repo-url> my-serviceNow-mcp
+cd my-serviceNow-mcp
+```
+
+### Step 2 — Configure the environment
 
 ```bash
 cp .env.example .env
-# Edit .env with production values
+nano .env
+```
 
+Set these values in `.env`:
+
+| Variable | Value |
+|----------|-------|
+| `SERVICENOW_INSTANCE_URL` | `https://dev12345.service-now.com` |
+| `AUTH_TYPE` | `api_key` |
+| `SERVICENOW_API_KEY` | Your ServiceNow API key |
+| `MCP_TRANSPORT` | `http` |
+| `MCP_PORT` | `8080` |
+| `MCP_SERVER_API_KEY` | A strong random string — this protects the `/sse` endpoint |
+| `LOG_LEVEL` | `info` |
+| `NODE_ENV` | `production` |
+
+> **Never commit `.env` to git.** It contains secrets.
+
+To generate a random key for `MCP_SERVER_API_KEY`:
+```bash
+openssl rand -hex 32
+```
+
+### Step 3 — Build and start the container
+
+```bash
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
-The container runs in HTTP mode (`MCP_TRANSPORT=http`) on port 8080, bound to `127.0.0.1` only. Place an Nginx reverse proxy in front for TLS.
+Verify it started:
 
-### Nginx snippet (add to existing HTTPS server block)
+```bash
+# Check the container is running
+docker compose -f docker/docker-compose.yml ps
+
+# Check the startup logs
+docker compose -f docker/docker-compose.yml logs mcp
+```
+
+The container runs on `127.0.0.1:8080` and is not reachable from the internet until Nginx is configured in the next step.
+
+### Step 4 — Add the Nginx proxy block
+
+Find your existing Nginx server block for your domain. Common locations:
+
+```
+/etc/nginx/sites-available/<your-site>.conf
+/etc/nginx/conf.d/<your-site>.conf
+/etc/nginx/nginx.conf
+```
+
+Open the file and paste the contents of `nginx/nginx-snippet.conf` **inside the `server { }` block that handles HTTPS (port 443)**:
 
 ```nginx
 location /sn-mcp/ {
     proxy_pass         http://127.0.0.1:8080/;
     proxy_http_version 1.1;
+
+    # Required for SSE (Server-Sent Events)
     proxy_buffering            off;
     proxy_cache                off;
     proxy_read_timeout         3600s;
     proxy_set_header           Connection '';
     chunked_transfer_encoding  on;
+
     proxy_set_header Host              $host;
     proxy_set_header X-Real-IP         $remote_addr;
     proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
@@ -175,7 +232,40 @@ location /sn-mcp/ {
 }
 ```
 
-SSE endpoint: `https://<your-domain>/sn-mcp/sse`
+Test and reload Nginx:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Step 5 — Verify the deployment
+
+```bash
+curl -v https://<your-domain>/sn-mcp/sse \
+  -H "Authorization: Bearer <your-MCP_SERVER_API_KEY>"
+```
+
+Expected response:
+- HTTP status: `200 OK`
+- `Content-Type: text/event-stream`
+- The connection stays open (SSE stream)
+
+### Redeploying after a code update
+
+```bash
+git pull
+docker compose -f docker/docker-compose.yml up -d --build
+docker image prune -f   # remove old image layers
+```
+
+### Container logs and maintenance
+
+```bash
+docker compose -f docker/docker-compose.yml logs -f mcp   # live logs
+docker compose -f docker/docker-compose.yml ps             # check status
+docker compose -f docker/docker-compose.yml down           # stop
+```
 
 ---
 
