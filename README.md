@@ -335,3 +335,14 @@ The SSE endpoint is available at the forwarded HTTPS URL on path `/sse`.
 - The `idea` table requires the **Innovation Management plugin** to be active on the ServiceNow instance. Verify via the `sys_plugins` table or ask your ServiceNow admin before using it.
 - All ServiceNow API calls use `sysparm_display_value=true` and `sysparm_exclude_reference_link=true` — reference fields return human-readable display values, not raw sys_ids.
 - Tool handlers never throw. All exceptions are caught at the tool boundary and returned as `{ "success": false, "message": "..." }`.
+
+---
+
+## CI/CD Pipeline Status
+
+✅ **Azure Container Apps deployment fully operational**
+- Test ACA: Auto-deploys on every push to `main`
+- Production ACA: Deploys after manual approval
+- Full pipeline: Test → Build → Deploy Test → Smoke Test → (Approval) → Deploy Prod
+
+See [docs/azure-deployment.md](docs/azure-deployment.md) for complete setup and operations documentation.
