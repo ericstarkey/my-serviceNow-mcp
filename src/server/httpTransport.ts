@@ -38,6 +38,11 @@ export async function startHttpTransport(server: McpServer): Promise<void> {
     next();
   });
 
+  // Health check endpoint — used by ACA liveness/readiness probes
+  app.get('/health', (_req, res) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
   // Track active transports by session ID
   const transports: Record<string, SSEServerTransport> = {};
 

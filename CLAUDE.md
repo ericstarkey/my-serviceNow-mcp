@@ -49,7 +49,7 @@ AI Triage Agent (separate project)
          |
          |  STDIO transport  (local dev — Claude Desktop, local agent)
          |  OR
-         |  HTTP + SSE transport  (remote — production VPS, GitHub Codespaces)
+         |  HTTP + SSE transport  (remote — Azure Container Apps, GitHub Codespaces)
          v
 ┌─────────────────────────────────┐
 │     ServiceNow MCP Server       │  (this project)
@@ -66,14 +66,17 @@ AI Triage Agent (separate project)
     https://<instance>.service-now.com/api/now/...
 ```
 
+**Primary production deployment:** Azure Container Apps (South Central US).
+See [docs/architecture.md](docs/architecture.md) for the full infrastructure diagram.
+
 ### Transport Mode Decision
 
 The server selects its transport at startup based on the `MCP_TRANSPORT` environment variable:
 
-| Value   | Transport         | Use case                                              |
-|---------|-------------------|-------------------------------------------------------|
-| `stdio` | STDIO (default)   | Local dev, Claude Desktop, local MCP clients          |
-| `http`  | HTTP + SSE        | Production Docker deployment, GitHub Codespaces       |
+| Value   | Transport         | Use case                                                  |
+|---------|-------------------|-----------------------------------------------------------|
+| `stdio` | STDIO (default)   | Local dev, Claude Desktop, local MCP clients              |
+| `http`  | HTTP + SSE        | Azure Container Apps (production), GitHub Codespaces      |
 
 When `MCP_TRANSPORT` is unset, `stdio` is used.
 
@@ -181,12 +184,19 @@ my-serviceNow-mcp/
 ├── .devcontainer/
 │   ├── devcontainer.json           # GitHub Codespaces configuration
 │   └── postCreate.sh               # npm install + env setup
+├── .github/
+│   └── workflows/
+│       └── deploy.yml              # CI/CD pipeline: test → build → test ACA → approve → prod ACA
 ├── docker/
 │   ├── Dockerfile                  # Production multi-stage image
-│   └── docker-compose.yml          # MCP container (VPS path-proxy mode)
+│   └── docker-compose.yml          # VPS deployment (secondary environment)
+├── docs/
+│   ├── architecture.md             # Infrastructure diagram (Mermaid) + component overview
+│   └── azure-deployment.md         # Step-by-step Azure setup guide
 ├── nginx/
-│   ├── nginx-snippet.conf          # Location block to paste into existing VPS Nginx
-│   └── nginx-standalone.conf       # Full Nginx config for port-8443 standalone mode
+│   └── nginx-snippet.conf          # Location block for VPS Nginx (secondary env)
+├── scripts/
+│   └── provision-azure.sh          # Idempotent Azure resource provisioning script
 ├── .env.example                    # Template for all env vars (no secrets)
 ├── .gitignore
 ├── .eslintrc.json
@@ -243,14 +253,22 @@ npm run dev:http
 
 The SSE endpoint is available at the Codespaces forwarded HTTPS URL, path `/sse`.
 
-### 5.3 Docker (Production)
+### 5.3 Azure Container Apps (Primary Production)
 
-See Section 12 (Deployment) for full Docker instructions.
+The primary deployment targets are Azure Container Apps — see Section 12 and [docs/azure-deployment.md](docs/azure-deployment.md).
 
-Quick start:
+Quick summary:
+- **Test ACA:** `ca-snmcp-test` — auto-deployed on every push to `main`
+- **Prod ACA:** `ca-snmcp-prod` — deployed after manual approval in GitHub Actions
+
+### 5.4 Docker / VPS (Secondary Environment)
+
+The Hostinger VPS is a secondary, on-demand test environment. See Section 12.2 for VPS instructions.
+
+Quick start (VPS only):
 ```bash
 cp .env.example .env
-# Edit .env with production credentials
+# Edit .env with credentials
 docker compose -f docker/docker-compose.yml up -d --build
 ```
 
@@ -601,6 +619,8 @@ npx vitest run tests/unit/auth/authManager.test.ts
 
 ## 11. Key Commands
 
+### Development
+
 ```bash
 npm install               # Install all dependencies
 npm run dev               # Dev server, STDIO mode, hot reload (tsx watch)
@@ -615,6 +635,24 @@ npm run lint              # ESLint
 npm run lint:fix          # ESLint with auto-fix
 npm run format            # Prettier format
 npm run typecheck         # tsc --noEmit (type check only)
+```
+
+### Azure Operations
+
+```bash
+# One-time provisioning (creates all Azure resources)
+bash scripts/provision-azure.sh
+
+# View live logs for an ACA
+az containerapp logs show --name ca-snmcp-prod --resource-group rg-snmcp-prod-scus --follow
+
+# List production revisions
+az containerapp revision list --name ca-snmcp-prod --resource-group rg-snmcp-prod-scus --output table
+
+# Emergency rollback (shift traffic to previous revision)
+az containerapp ingress traffic set \
+  --name ca-snmcp-prod --resource-group rg-snmcp-prod-scus \
+  --revision-weight <prev-revision-name>=100
 ```
 
 ### Target `package.json` scripts
@@ -642,9 +680,34 @@ npm run typecheck         # tsc --noEmit (type check only)
 
 ## 12. Deployment
 
-### Docker Image (`docker/Dockerfile`)
+### 12.1 Primary Deployment — Azure Container Apps
 
-Multi-stage build targeting Node.js 20 LTS on Alpine for minimal image size.
+The production deployment targets are two Azure Container Apps in South Central US:
+
+| Environment | Container App | Auto-deploy | Access |
+|-------------|---------------|-------------|--------|
+| Test | `ca-snmcp-test` | On every push to `main` | `https://ca-snmcp-test.{azure-domain}/sse` |
+| Production | `ca-snmcp-prod` | After manual approval | `https://ca-snmcp-prod.{azure-domain}/sse` |
+
+All secrets are stored in Azure Key Vault (`kv-snmcp-test-scus`, `kv-snmcp-prod-scus`) and pulled via managed identity — no secrets in the container environment directly.
+
+**Full setup instructions:** [docs/azure-deployment.md](docs/azure-deployment.md)
+
+**Infrastructure diagram:** [docs/architecture.md](docs/architecture.md)
+
+#### CI/CD Pipeline Summary
+
+Push to `main` → GitHub Actions:
+1. Run tests, lint, typecheck
+2. Build Docker image, push to `crsnmcp001.azurecr.io` (tagged with commit SHA)
+3. Deploy to `ca-snmcp-test` (automatic)
+4. Smoke test: `GET /health` with retry
+5. **Manual approval gate** (notify: ericstarkey)
+6. Deploy same image to `ca-snmcp-prod`
+
+#### Docker Image (`docker/Dockerfile`)
+
+Multi-stage build targeting Node.js 20 LTS on Alpine:
 
 ```dockerfile
 # Stage 1: Build
@@ -653,7 +716,7 @@ WORKDIR /app
 COPY package*.json tsconfig.json ./
 RUN npm ci
 COPY src/ ./src/
-RUN npm run build
+RUN npm run build && cp -r src/resources/schemas dist/resources/schemas
 
 # Stage 2: Production
 FROM node:20-alpine AS production
@@ -669,145 +732,49 @@ EXPOSE 8080
 CMD ["node", "dist/server/index.js"]
 ```
 
-### VPS Deployment — Ports 80/443 Already in Use
+The image is built by the CI pipeline and pushed to `crsnmcp001.azurecr.io/servicenow-mcp:{sha}`.
 
-Since ports 80/443 are occupied on your Hostinger VPS, two deployment options are documented.
-Choose one based on your existing Nginx setup.
+#### HTTP Endpoints (ACA / HTTP mode)
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `GET /health` | None | Liveness/readiness probe — returns `{"status":"ok"}` |
+| `GET /sse` | Bearer / x-api-key | Establishes MCP SSE stream |
+| `POST /messages` | None (session-bound) | Routes JSON-RPC to SSE session |
 
 ---
 
-#### Option A: Path-Based Proxy from Existing Nginx (Recommended)
+### 12.2 Secondary Environment — Hostinger VPS
 
-Add a `location` block to your existing Nginx server block that forwards a path prefix
-to the MCP container running internally on port 8080.
+The VPS is available for special-case testing that requires an environment outside Azure (e.g., testing VPS-specific network paths, validating Docker configs before pipeline changes). It is **not** in the automated pipeline.
 
-**`nginx/nginx-snippet.conf`** — paste into your existing server block:
+#### Deploy to VPS Manually
 
-```nginx
-# ServiceNow MCP Server — add inside your existing HTTPS server block
-location /sn-mcp/ {
-    proxy_pass         http://127.0.0.1:8080/;
-    proxy_http_version 1.1;
+On the VPS:
 
-    # Required for SSE (Server-Sent Events)
-    proxy_buffering            off;
-    proxy_cache                off;
-    proxy_read_timeout         3600s;
-    proxy_set_header           Connection '';
-    chunked_transfer_encoding  on;
-
-    proxy_set_header Host              $host;
-    proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-**`docker/docker-compose.yml`** — MCP container only, no Nginx (existing Nginx handles TLS):
-
-```yaml
-version: "3.9"
-services:
-  mcp:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    image: sn-mcp:latest
-    restart: unless-stopped
-    env_file: ../.env
-    ports:
-      - "127.0.0.1:8080:8080"   # Bind to loopback only — existing Nginx proxies to this
-    environment:
-      - MCP_TRANSPORT=http
-      - MCP_PORT=8080
-```
-
-The SSE endpoint will be available at: `https://<your-domain>/sn-mcp/sse`
-
-**Deploy steps:**
 ```bash
-git clone <repo-url> && cd my-serviceNow-mcp
-cp .env.example .env && nano .env
+# Authenticate to ACR
+az login
+az acr login --name crsnmcp001
 
-# Start the MCP container
-docker compose -f docker/docker-compose.yml up -d --build
+# Pull the specific image you want to test
+docker pull crsnmcp001.azurecr.io/servicenow-mcp:<sha>
 
-# Add the snippet from nginx/nginx-snippet.conf to your existing Nginx config
-nano /etc/nginx/sites-available/your-site.conf
-# (paste the location block inside your HTTPS server block)
+# Update docker-compose.yml to use the pulled image, then:
+docker compose -f docker/docker-compose.yml up -d
+
+# Add nginx/nginx-snippet.conf to the existing Nginx server block
 nginx -t && systemctl reload nginx
-
-# Verify SSE endpoint
-curl -v https://<your-domain>/sn-mcp/sse \
-  -H "Authorization: Bearer <MCP_SERVER_API_KEY>"
-# Expect: 200 OK, Content-Type: text/event-stream
 ```
 
----
+SSE endpoint on VPS: `https://<your-domain>/sn-mcp/sse`
 
-#### Option B: Standalone on Port 8443 (Alternative)
-
-Run the MCP server with its own Nginx on port 8443 without touching the existing Nginx.
-
-**`nginx/nginx-standalone.conf`** — full standalone Nginx config:
-
-```nginx
-server {
-    listen 8443 ssl;
-    server_name _;
-
-    ssl_certificate     /etc/nginx/certs/server.crt;
-    ssl_certificate_key /etc/nginx/certs/server.key;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-
-    location /sse {
-        proxy_pass         http://mcp:8080/sse;
-        proxy_http_version 1.1;
-        proxy_buffering            off;
-        proxy_cache                off;
-        proxy_read_timeout         3600s;
-        proxy_set_header           Connection '';
-        chunked_transfer_encoding  on;
-    }
-
-    location / {
-        proxy_pass http://mcp:8080;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-    }
-}
-```
-
-**Deploy steps for Option B:**
-```bash
-# Generate self-signed cert (once per server)
-mkdir -p nginx/certs
-openssl req -x509 -nodes -newkey rsa:4096 \
-  -keyout nginx/certs/server.key \
-  -out nginx/certs/server.crt \
-  -days 365 \
-  -subj "/CN=sn-mcp-server"
-
-# Build and start
-docker compose -f docker/docker-compose-standalone.yml up -d --build
-
-# Verify
-curl -k -v https://<VPS_IP>:8443/sse \
-  -H "Authorization: Bearer <MCP_SERVER_API_KEY>"
-```
-
-> Note: Port 8443 must be open in your Hostinger VPS firewall. Check via the Hostinger
-> control panel → Firewall, or `ufw allow 8443`.
-
----
-
-### Container Maintenance
+#### VPS Container Maintenance
 
 ```bash
 docker compose logs -f mcp           # Live logs
-docker compose up -d --build         # Redeploy after git pull
 docker compose down                  # Stop all services
-docker image prune -f                # Clean up old images after redeploy
+docker image prune -f                # Clean up old images
 ```
 
 ---

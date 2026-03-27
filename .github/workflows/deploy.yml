@@ -1,0 +1,222 @@
+# CI/CD Pipeline — ServiceNow MCP Server
+#
+# Flow:
+#   push to main → test → build & push image → deploy to test ACA
+#   → smoke test → [manual approval] → deploy to prod ACA → prod health check
+#
+# Required GitHub repository secrets:
+#   AZURE_CLIENT_ID      — App registration client ID (OIDC, not a password)
+#   AZURE_TENANT_ID      — Azure AD tenant ID
+#   AZURE_SUBSCRIPTION_ID — Azure subscription ID
+#
+# Required GitHub environments (Settings → Environments):
+#   testing    — no protection rules (auto-deploy)
+#   production — Required reviewer: ericstarkey, deployment branch: main
+
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write  # Required for OIDC token exchange with Azure
+  contents: read
+
+env:
+  ACR_NAME: crsnmcp001
+  IMAGE_REPO: servicenow-mcp
+  PROD_RG: rg-snmcp-prod-scus
+  TEST_RG: rg-snmcp-test-scus
+  CA_PROD: ca-snmcp-prod
+  CA_TEST: ca-snmcp-test
+
+jobs:
+  # ── Job 1: Run tests, linting, and type checking ────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+  # ── Job 2: Build Docker image and push to ACR ───────────────────────────────
+  build:
+    name: Build & Push Image
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.image-tag.outputs.tag }}
+      image-ref: ${{ steps.image-tag.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive short image tag from commit SHA
+        id: image-tag
+        run: |
+          TAG="${GITHUB_SHA::7}"
+          REF="${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_REPO }}:$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Image: $REF"
+
+      - name: Azure login (OIDC — no stored secret)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Authenticate Docker to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Build Docker image
+        run: docker build -f docker/Dockerfile -t "${{ steps.image-tag.outputs.ref }}" .
+
+      - name: Push Docker image to ACR
+        run: docker push "${{ steps.image-tag.outputs.ref }}"
+
+  # ── Job 3: Deploy to test Container App ─────────────────────────────────────
+  deploy-test:
+    name: Deploy → Test
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testing
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy new image to test ACA
+        run: |
+          az containerapp update \
+            --name "${{ env.CA_TEST }}" \
+            --resource-group "${{ env.TEST_RG }}" \
+            --image "${{ needs.build.outputs.image-ref }}"
+
+  # ── Job 4: Smoke test against test ACA ──────────────────────────────────────
+  smoke-test:
+    name: Smoke Test (test ACA)
+    needs: [build, deploy-test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get test ACA FQDN
+        id: fqdn
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ env.CA_TEST }}" \
+            --resource-group "${{ env.TEST_RG }}" \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv)
+          echo "fqdn=$FQDN" >> "$GITHUB_OUTPUT"
+          echo "Test ACA FQDN: $FQDN"
+
+      - name: Health check (retry up to 10x for cold-start)
+        run: |
+          URL="https://${{ steps.fqdn.outputs.fqdn }}/health"
+          echo "Health check URL: $URL"
+          for i in $(seq 1 10); do
+            HTTP_STATUS=$(curl -s -o /tmp/health_body -w "%{http_code}" --max-time 15 "$URL" || echo "000")
+            echo "Attempt $i — HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Health check passed."
+              exit 0
+            fi
+            if [ "$i" = "10" ]; then
+              echo "Health check failed after 10 attempts (last status: $HTTP_STATUS)"
+              echo "Response body:"
+              cat /tmp/health_body 2>/dev/null || true
+              exit 1
+            fi
+            echo "Retrying in 15s (cold-start may still be in progress)..."
+            sleep 15
+          done
+
+  # ── Job 5: Deploy to production (requires manual approval) ──────────────────
+  deploy-prod:
+    name: Deploy → Production
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://ca-snmcp-prod.southcentralus.azurecontainerapps.io
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy new image to production ACA
+        # Creates a new revision with revision-suffix = commit SHA.
+        # Previous revision stays at 0% traffic for instant rollback.
+        # Traffic is shifted to the new revision immediately after creation.
+        run: |
+          TAG="${{ needs.build.outputs.image-tag }}"
+          IMAGE="${{ needs.build.outputs.image-ref }}"
+
+          echo "Deploying image: $IMAGE"
+          az containerapp update \
+            --name "${{ env.CA_PROD }}" \
+            --resource-group "${{ env.PROD_RG }}" \
+            --image "$IMAGE" \
+            --revision-suffix "$TAG"
+
+          # Shift 100% traffic to the new revision
+          REVISION="${{ env.CA_PROD }}--$TAG"
+          echo "Routing 100% traffic to revision: $REVISION"
+          az containerapp ingress traffic set \
+            --name "${{ env.CA_PROD }}" \
+            --resource-group "${{ env.PROD_RG }}" \
+            --revision-weight "$REVISION=100"
+
+      - name: Verify production health
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ env.CA_PROD }}" \
+            --resource-group "${{ env.PROD_RG }}" \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv)
+          URL="https://$FQDN/health"
+          echo "Production health check URL: $URL"
+          sleep 10
+          for i in $(seq 1 5); do
+            HTTP_STATUS=$(curl -s -o /tmp/prod_health_body -w "%{http_code}" --max-time 15 "$URL" || echo "000")
+            echo "Attempt $i — HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" = "200" ]; then
+              echo "Production health check passed."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Production health check failed."
+          cat /tmp/prod_health_body 2>/dev/null || true
+          exit 1

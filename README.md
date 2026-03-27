@@ -123,12 +123,13 @@ To register with Claude Desktop, add to `claude_desktop_config.json`:
 
 ### HTTP + SSE
 
-Exposes two endpoints for remote MCP clients:
+Exposes these endpoints:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/sse` | `GET` | Establishes an SSE stream. Protected by `MCP_SERVER_API_KEY` if set. |
-| `/messages` | `POST` | Receives JSON-RPC messages from clients. |
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/health` | `GET` | None | Liveness probe — returns `{"status":"ok"}`. Used by ACA health checks. |
+| `/sse` | `GET` | Bearer / x-api-key | Establishes an SSE stream. Protected by `MCP_SERVER_API_KEY` if set. |
+| `/messages` | `POST` | None (session-bound) | Receives JSON-RPC messages from clients. |
 
 Inbound auth accepts the key in either:
 - `Authorization: Bearer <key>` header
@@ -144,9 +145,33 @@ curl -v http://localhost:8080/sse \
 
 ---
 
+## Deploying to Azure Container Apps (Primary)
+
+The server is deployed to two Azure Container Apps in South Central US via an automated GitHub Actions pipeline.
+
+| Environment | Container App | URL |
+|-------------|---------------|-----|
+| Test | `ca-snmcp-test` | Auto-deployed on every `main` push |
+| Production | `ca-snmcp-prod` | Deployed after manual approval |
+
+**Pipeline flow:** push to `main` → tests → build image → deploy to test → smoke test → approve → deploy to prod
+
+All secrets are managed in Azure Key Vault. No secrets are stored in Docker images or GitHub Secrets.
+
+```bash
+# One-time provisioning (creates all Azure resources)
+bash scripts/provision-azure.sh
+```
+
+For the full setup guide including OIDC credential setup, Key Vault secrets population, and GitHub environment configuration, see [docs/azure-deployment.md](docs/azure-deployment.md).
+
+For the infrastructure diagram, see [docs/architecture.md](docs/architecture.md).
+
+---
+
 ## Local Docker Testing
 
-Use `docker/docker-compose.local.yml` to run the container locally for testing and troubleshooting before deploying to a VPS. This file is a standalone config that exposes port 8080 directly to the host (unlike the VPS config which binds to loopback only).
+Use `docker/docker-compose.local.yml` to run the container locally for testing and troubleshooting. This config exposes port 8080 directly to the host.
 
 ```bash
 # Build and start
@@ -155,7 +180,10 @@ docker compose -f docker/docker-compose.local.yml up -d --build
 # Watch startup logs
 docker compose -f docker/docker-compose.local.yml logs -f mcp
 
-# Verify the SSE endpoint
+# Verify endpoints
+curl http://localhost:8080/health
+# Expected: {"status":"ok"}
+
 curl -v http://localhost:8080/sse \
   -H "Authorization: Bearer <your-MCP_SERVER_API_KEY>"
 # Expected: HTTP 200, Content-Type: text/event-stream
@@ -169,166 +197,22 @@ docker compose -f docker/docker-compose.local.yml down
 
 `LOG_LEVEL` is set to `debug` in this config for verbose output during troubleshooting.
 
-> **Note:** Do not use `docker-compose.local.yml` in production. Use `docker/docker-compose.yml` on the VPS.
-
 ---
 
-## Deploying to a VPS (Docker + Nginx)
+## Secondary Environment — Hostinger VPS
 
-> **Prerequisites:** The VPS is running Debian/Ubuntu and has Docker and Docker Compose installed. Nginx and TLS are configured as part of the steps below.
-
-### Step 1 — SSH in and clone the repository
+The VPS is available for special-case testing outside Azure. It is not part of the automated pipeline.
 
 ```bash
-ssh user@your-vps-ip
-git clone <your-repo-url> my-serviceNow-mcp
-cd my-serviceNow-mcp
+# On the VPS — pull a specific image from ACR and start
+az acr login --name crsnmcp001
+docker pull crsnmcp001.azurecr.io/servicenow-mcp:<sha>
+docker compose -f docker/docker-compose.yml up -d
 ```
 
-### Step 2 — Configure the environment
+Add `nginx/nginx-snippet.conf` to your existing Nginx `server {}` block, then `nginx -t && systemctl reload nginx`.
 
-```bash
-cp .env.example .env
-nano .env
-```
-
-Set these values in `.env`:
-
-| Variable | Value |
-|----------|-------|
-| `SERVICENOW_INSTANCE_URL` | `https://dev12345.service-now.com` |
-| `AUTH_TYPE` | `api_key` |
-| `SERVICENOW_API_KEY` | Your ServiceNow API key |
-| `MCP_TRANSPORT` | `http` |
-| `MCP_PORT` | `8080` |
-| `MCP_SERVER_API_KEY` | A strong random string — this protects the `/sse` endpoint |
-| `LOG_LEVEL` | `info` |
-| `NODE_ENV` | `production` |
-
-> **Never commit `.env` to git.** It contains secrets.
-
-To generate a random key for `MCP_SERVER_API_KEY`:
-```bash
-openssl rand -hex 32
-```
-
-### Step 3 — Build and start the container
-
-```bash
-docker compose -f docker/docker-compose.yml up -d --build
-```
-
-Verify it started:
-
-```bash
-# Check the container is running
-docker compose -f docker/docker-compose.yml ps
-
-# Check the startup logs
-docker compose -f docker/docker-compose.yml logs mcp
-```
-
-The container listens on `127.0.0.1:8080` and is not reachable from the internet until Nginx is configured in the next steps.
-
-### Step 4 — Install Nginx
-
-```bash
-sudo apt update
-sudo apt install -y nginx
-
-# Enable Nginx to start on boot and start it now
-sudo systemctl enable nginx
-sudo systemctl start nginx
-
-# Open HTTP and HTTPS through the firewall
-sudo ufw allow 'Nginx Full'
-
-# Verify Nginx is running
-sudo systemctl status nginx
-curl -I http://localhost   # should return 200 OK
-```
-
-### Step 5 — Obtain a TLS certificate
-
-> **Before running Certbot:** make sure your domain's DNS A record points to this VPS's public IP. Certbot performs an HTTP-01 challenge that requires the domain to resolve publicly.
-
-```bash
-sudo apt install -y certbot python3-certbot-nginx
-
-# Issue the certificate — replace <your-domain> with your actual domain
-sudo certbot --nginx -d <your-domain>
-```
-
-Certbot will prompt for an email address, ask you to agree to the terms of service, and then automatically configure Nginx for HTTPS and set up a cron job for auto-renewal.
-
-Verify that auto-renewal works:
-```bash
-sudo certbot renew --dry-run
-```
-
-### Step 6 — Add the MCP proxy block to Nginx
-
-Certbot created (or updated) a config file for your domain. Open it:
-
-```bash
-sudo nano /etc/nginx/sites-available/<your-domain>
-```
-
-Locate the `server { }` block that contains `listen 443 ssl` and paste the following **inside** that block:
-
-```nginx
-location /sn-mcp/ {
-    proxy_pass         http://127.0.0.1:8080/;
-    proxy_http_version 1.1;
-
-    # Required for SSE (Server-Sent Events)
-    proxy_buffering            off;
-    proxy_cache                off;
-    proxy_read_timeout         3600s;
-    proxy_set_header           Connection '';
-    chunked_transfer_encoding  on;
-
-    proxy_set_header Host              $host;
-    proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-Test and reload Nginx:
-
-```bash
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-### Step 7 — Verify the deployment
-
-```bash
-curl -v https://<your-domain>/sn-mcp/sse \
-  -H "Authorization: Bearer <your-MCP_SERVER_API_KEY>"
-```
-
-Expected response:
-- HTTP status: `200 OK`
-- `Content-Type: text/event-stream`
-- The connection stays open (SSE stream)
-
-### Redeploying after a code update
-
-```bash
-git pull
-docker compose -f docker/docker-compose.yml up -d --build
-docker image prune -f   # remove old image layers
-```
-
-### Container logs and maintenance
-
-```bash
-docker compose -f docker/docker-compose.yml logs -f mcp   # live logs
-docker compose -f docker/docker-compose.yml ps             # check status
-docker compose -f docker/docker-compose.yml down           # stop
-```
+SSE endpoint: `https://<your-domain>/sn-mcp/sse`
 
 ---
 
