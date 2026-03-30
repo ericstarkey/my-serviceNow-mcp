@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 const RUN = process.env['INTEGRATION_TESTS_HTTP'] === 'true';
 const BASE_URL = process.env['MCP_HTTP_BASE_URL'] ?? 'http://localhost:8080';
@@ -78,5 +79,45 @@ describe.skipIf(!RUN)('HTTP+SSE transport integration', () => {
     // Tool must return a structured object, never throw through the transport layer
     expect(result.content[0]).toBeDefined();
     expect(typeof body).toBe('object');
+  });
+});
+
+describe.skipIf(!RUN)('Streamable HTTP transport integration (/mcp)', () => {
+  let client: Client;
+
+  beforeAll(async () => {
+    const headers: Record<string, string> = {};
+    if (API_KEY) headers['Authorization'] = `Bearer ${API_KEY}`;
+
+    const transport = new StreamableHTTPClientTransport(new URL(`${BASE_URL}/mcp`), {
+      requestInit: { headers },
+    });
+
+    client = new Client(
+      { name: 'integration-test-client-streamable', version: '1.0.0' },
+      { capabilities: {} },
+    );
+    await client.connect(transport);
+  });
+
+  afterAll(async () => {
+    await client.close();
+  });
+
+  it('list_ticket_types returns all 6 ticket types via /mcp', async () => {
+    const result = await client.callTool({ name: 'list_ticket_types', arguments: {} });
+    const types = JSON.parse((result.content[0] as { text: string }).text);
+    expect(Array.isArray(types)).toBe(true);
+    expect(types).toHaveLength(6);
+  });
+
+  it('get_ticket_schema returns field definitions for incident via /mcp', async () => {
+    const result = await client.callTool({
+      name: 'get_ticket_schema',
+      arguments: { table: 'incident' },
+    });
+    const fields = JSON.parse((result.content[0] as { text: string }).text);
+    expect(Array.isArray(fields)).toBe(true);
+    expect(fields.length).toBeGreaterThan(0);
   });
 });

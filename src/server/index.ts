@@ -16,12 +16,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const server = createMcpServer();
-
   if (config.MCP_TRANSPORT === 'http') {
-    await startHttpTransport(server);
+    await startHttpTransport(createMcpServer);
   } else {
-    await startStdioTransport(server);
+    await startStdioTransport(createMcpServer());
   }
 }
 
