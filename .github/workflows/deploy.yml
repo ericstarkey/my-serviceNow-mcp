@@ -251,7 +251,6 @@ jobs:
     name: Integration Tests — Production (ServiceNow)
     needs: [build, deploy-prod]
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v4
 
