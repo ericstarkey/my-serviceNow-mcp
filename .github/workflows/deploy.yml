@@ -2,7 +2,7 @@
 #
 # Flow:
 #   push to main → test → build & push image → deploy to test ACA
-#   → smoke test → [manual approval] → deploy to prod ACA → prod health check
+#   → smoke test → integration tests (live ServiceNow) → [manual approval] → deploy to prod ACA → prod health check
 #
 # Required GitHub repository secrets:
 #   AZURE_CLIENT_ID      — App registration client ID (OIDC, not a password)
@@ -159,10 +159,35 @@ jobs:
             sleep 15
           done
 
-  # ── Job 5: Deploy to production (requires manual approval) ──────────────────
+  # ── Job 5: Integration tests against live ServiceNow instance ───────────────
+  integration-test:
+    name: Integration Tests (ServiceNow)
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    environment: testing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests (live ServiceNow)
+        env:
+          INTEGRATION_TESTS: 'true'
+          SERVICENOW_INSTANCE_URL: ${{ secrets.SERVICENOW_INSTANCE_URL }}
+          AUTH_TYPE: ${{ secrets.SERVICENOW_AUTH_TYPE }}
+          SERVICENOW_API_KEY: ${{ secrets.SERVICENOW_API_KEY }}
+        run: npm run test:integration
+
+  # ── Job 6: Deploy to production (requires manual approval) ──────────────────
   deploy-prod:
     name: Deploy → Production
-    needs: [build, smoke-test]
+    needs: [build, smoke-test, integration-test]
     runs-on: ubuntu-latest
     environment:
       name: production
