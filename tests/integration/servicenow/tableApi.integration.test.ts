@@ -6,6 +6,12 @@ import { TableApi } from '../../../src/servicenow/tableApi.js';
 
 const RUN = process.env['INTEGRATION_TESTS'] === 'true';
 
+// Live ServiceNow calls can be slow on the first request when a dev instance is
+// cold (it hibernates after inactivity and takes several seconds to wake). The
+// default 5s vitest timeout is too tight for that cold-start; allow up to the
+// SERVICENOW_TIMEOUT default (30s) so the first live call doesn't spuriously fail.
+const LIVE_TIMEOUT_MS = 30_000;
+
 describe.skipIf(!RUN)('TableApi integration tests (live ServiceNow instance)', () => {
   let tableApi: TableApi;
 
@@ -28,7 +34,7 @@ describe.skipIf(!RUN)('TableApi integration tests (live ServiceNow instance)', (
     expect(record.sys_id).toBeTruthy();
     expect(typeof record['number']).toBe('string');
     expect((record['number'] as string).startsWith('INC')).toBe(true);
-  });
+  }, LIVE_TIMEOUT_MS);
 
   it('should get a created incident by sys_id', async () => {
     const created = await tableApi.createRecord({
@@ -47,7 +53,7 @@ describe.skipIf(!RUN)('TableApi integration tests (live ServiceNow instance)', (
 
     expect(fetched.sys_id).toBe(created.sys_id);
     expect(fetched['number']).toBe(created['number']);
-  });
+  }, LIVE_TIMEOUT_MS);
 
   it('should query an incident by ticket number', async () => {
     const created = await tableApi.createRecord({
@@ -68,5 +74,5 @@ describe.skipIf(!RUN)('TableApi integration tests (live ServiceNow instance)', (
 
     expect(results).toHaveLength(1);
     expect(results.at(0)?.sys_id).toBe(created.sys_id);
-  });
+  }, LIVE_TIMEOUT_MS);
 });
