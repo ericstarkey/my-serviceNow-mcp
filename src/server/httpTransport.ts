@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { parseConfig } from '../auth/config.js';
 import { logger } from '../logger.js';
@@ -102,25 +104,79 @@ export async function startHttpTransport(serverFactory: () => McpServer): Promis
     }
   });
 
-  // Streamable HTTP endpoint — stateless, one server instance per request (modern MCP clients)
-  app.post('/mcp', async (req, res) => {
-    logger.debug('POST /mcp — Streamable HTTP request');
+  // Streamable HTTP endpoint — session-managed (modern MCP clients, e.g. Azure AI Foundry).
+  //
+  // Modern clients drive the session across THREE HTTP methods on the same path:
+  //   POST   /mcp  — initialize, then send JSON-RPC requests/notifications
+  //   GET    /mcp  — open the server→client SSE stream for the established session
+  //   DELETE /mcp  — terminate the session
+  // All three must be routed to the transport. Registering only POST makes Express
+  // return 404 for GET/DELETE, which clients surface as a connection failure.
+  const streamableTransports: Record<string, StreamableHTTPServerTransport> = {};
+
+  const handleMcpRequest = async (req: Request, res: Response): Promise<void> => {
     try {
-      // No sessionIdGenerator = stateless mode (no session affinity required)
-      const transport = new StreamableHTTPServerTransport();
-      const requestServer = serverFactory();
-      // Cast needed: SDK's StreamableHTTPServerTransport has onclose? optional,
-      // but Transport interface declares it required — exactOptionalPropertyTypes mismatch
-      await requestServer.connect(transport as Parameters<typeof requestServer.connect>[0]);
+      const sessionId = req.headers['mcp-session-id'];
+      const sid = typeof sessionId === 'string' ? sessionId : undefined;
+
+      let transport: StreamableHTTPServerTransport;
+
+      if (sid && streamableTransports[sid]) {
+        // Existing session — reuse its transport.
+        transport = streamableTransports[sid];
+      } else if (!sid && req.method === 'POST' && isInitializeRequest(req.body)) {
+        // New session — create a transport and bind it to a fresh server instance.
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (newId: string) => {
+            streamableTransports[newId] = transport;
+            logger.info(`Streamable HTTP session initialized: ${newId}`);
+          },
+        });
+
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            logger.debug(`Streamable HTTP session closed: ${transport.sessionId}`);
+            delete streamableTransports[transport.sessionId];
+          }
+        };
+
+        const requestServer = serverFactory();
+        // Cast needed: SDK's StreamableHTTPServerTransport has onclose? optional,
+        // but Transport interface declares it required — exactOptionalPropertyTypes mismatch
+        await requestServer.connect(transport as Parameters<typeof requestServer.connect>[0]);
+      } else {
+        // GET/DELETE without a known session, or POST that is not an initialize request.
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+          id: null,
+        });
+        return;
+      }
+
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
-      logger.error('Error handling POST /mcp', {
+      logger.error(`Error handling ${req.method} /mcp`, {
         message: err instanceof Error ? err.message : String(err),
       });
       if (!res.headersSent) {
         res.status(500).send('Error handling request');
       }
     }
+  };
+
+  app.post('/mcp', (req, res) => {
+    logger.debug('POST /mcp — Streamable HTTP request');
+    void handleMcpRequest(req, res);
+  });
+  app.get('/mcp', (req, res) => {
+    logger.debug('GET /mcp — Streamable HTTP SSE stream');
+    void handleMcpRequest(req, res);
+  });
+  app.delete('/mcp', (req, res) => {
+    logger.debug('DELETE /mcp — Streamable HTTP session teardown');
+    void handleMcpRequest(req, res);
   });
 
   const port = config.MCP_PORT;

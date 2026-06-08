@@ -159,6 +159,29 @@ jobs:
             sleep 15
           done
 
+      - name: Verify Streamable HTTP endpoint is reachable (/mcp)
+        # Foundry and other modern MCP clients connect via Streamable HTTP, which
+        # drives GET/POST/DELETE on /mcp. A 404 here means the route is not wired
+        # (the exact failure mode that broke Foundry). Any non-404 status (400/401/
+        # 405/200) means the route exists and the transport is responding.
+        run: |
+          URL="https://${{ steps.fqdn.outputs.fqdn }}/mcp"
+          echo "Streamable HTTP probe URL: $URL"
+          HTTP_STATUS=$(curl -s -o /tmp/mcp_body -w "%{http_code}" --max-time 15 \
+            -X GET -H "Accept: text/event-stream" "$URL" || echo "000")
+          echo "GET /mcp — HTTP $HTTP_STATUS"
+          cat /tmp/mcp_body 2>/dev/null || true
+          echo ""
+          if [ "$HTTP_STATUS" = "404" ]; then
+            echo "FAIL: /mcp returned 404 — Streamable HTTP route is not wired. Modern MCP clients (Foundry) cannot connect."
+            exit 1
+          fi
+          if [ "$HTTP_STATUS" = "000" ]; then
+            echo "FAIL: /mcp unreachable (connection error)."
+            exit 1
+          fi
+          echo "/mcp route is wired (non-404)."
+
   # ── Job 5: Integration tests against live ServiceNow instance ───────────────
   integration-test:
     name: Integration Tests (ServiceNow)
@@ -245,6 +268,28 @@ jobs:
           echo "Production health check failed."
           cat /tmp/prod_health_body 2>/dev/null || true
           exit 1
+
+      - name: Verify production Streamable HTTP endpoint is reachable (/mcp)
+        # Guards the exact endpoint Foundry connects to in production. 404 = route
+        # not wired (Foundry cannot connect); any other status = route is live.
+        run: |
+          FQDN=$(az containerapp show \
+            --name "${{ env.CA_PROD }}" \
+            --resource-group "${{ env.PROD_RG }}" \
+            --query "properties.configuration.ingress.fqdn" \
+            -o tsv)
+          URL="https://$FQDN/mcp"
+          echo "Production Streamable HTTP probe URL: $URL"
+          HTTP_STATUS=$(curl -s -o /tmp/prod_mcp_body -w "%{http_code}" --max-time 15 \
+            -X GET -H "Accept: text/event-stream" "$URL" || echo "000")
+          echo "GET /mcp — HTTP $HTTP_STATUS"
+          cat /tmp/prod_mcp_body 2>/dev/null || true
+          echo ""
+          if [ "$HTTP_STATUS" = "404" ] || [ "$HTTP_STATUS" = "000" ]; then
+            echo "FAIL: production /mcp returned $HTTP_STATUS — modern MCP clients (Foundry) cannot connect."
+            exit 1
+          fi
+          echo "Production /mcp route is wired (non-404)."
 
   # ── Job 7: Integration tests against production ServiceNow instance ──────────
   integration-test-prod:

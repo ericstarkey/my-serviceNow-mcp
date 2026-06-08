@@ -739,8 +739,17 @@ The image is built by the CI pipeline and pushed to `crsnmcp001.azurecr.io/servi
 | Endpoint | Auth | Purpose |
 |----------|------|---------|
 | `GET /health` | None | Liveness/readiness probe — returns `{"status":"ok"}` |
-| `GET /sse` | Bearer / x-api-key | Establishes MCP SSE stream |
+| `GET /sse` | Bearer / x-api-key | Establishes MCP SSE stream (legacy HTTP+SSE transport) |
 | `POST /messages` | None (session-bound) | Routes JSON-RPC to SSE session |
+| `POST /mcp` | Bearer / x-api-key | Streamable HTTP transport (modern clients, e.g. Azure AI Foundry): initialize + JSON-RPC |
+| `GET /mcp` | Bearer / x-api-key | Streamable HTTP server→client SSE stream for an established session |
+| `DELETE /mcp` | Bearer / x-api-key | Streamable HTTP session teardown |
+
+> **Streamable HTTP requires all three methods (`GET`/`POST`/`DELETE`) on `/mcp`.** Modern
+> MCP clients (Azure AI Foundry) open with `POST /mcp` (initialize), then issue `GET /mcp`
+> to open the server→client stream and `DELETE /mcp` to close the session. Wiring only
+> `POST` makes Express return **404** for `GET`/`DELETE`, which clients surface as a
+> connection failure. The server keys transports by the `mcp-session-id` header.
 
 ---
 
